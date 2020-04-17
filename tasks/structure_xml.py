@@ -1,7 +1,7 @@
 # Downloads and uses the XML version of the US Code to extract a table of contents.
-# 
+#
 # Outputs JSON to STDOUT. Run and save with:
-#  ./run structure_xml > structure.json 
+#  ./run structure_xml > structure.json
 #
 # options:
 #   title: Do only a specific title (e.g. "5", "5a", "25")
@@ -38,7 +38,7 @@ def run(options):
 
   filenames = glob.glob("data/uscode.house.gov/xml/%s.zip" % title)
   filenames.sort()
-  
+
   # optional: --limit to a number of titles
   limit = options.get("limit", None)
   if limit:
@@ -50,27 +50,38 @@ def run(options):
   # process titles
 
   TOC = [ ]
-  
+
   for fn in filenames:
-    zf = zipfile.ZipFile(fn, "r")
-    xmlbody = zf.read(os.path.basename(fn).replace("xml_", "").replace(".zip", ".xml"))
+    try:
+      zf = zipfile.ZipFile(fn, "r")
+    except zipfile.BadZipfile:
+      continue
+    filename = os.path.basename(fn)
+    filename = filename.replace("xml_", "")
+    filename = filename.split('@')[0]
+    filename = filename + '.xml'
+    if '5a' in filename:
+        filename = filename.replace('5a', '5A')
+    if '50a' in filename:
+        filename = filename.replace('50a', '50A')
+    xmlbody = zf.read(filename)
     #print xmlbody
     dom = lxml.etree.fromstring(xmlbody)
-    titlenode = dom.xpath("uslm:main/uslm:title", namespaces=ns)[0]
+    titlenode = dom.xpath("/uslm:uscDoc/uslm:main/uslm:title|/uslm:uscDoc/uslm:appendix", namespaces=ns)[0]
     proc_node(titlenode, TOC, [], sections_only)
 
   # Sort the titles (take into account appendix notation).
   TOC.sort(key = lambda title : (int(title["number"].replace("a", "")), title["number"]))
-  
+
   # Write output in JSON to stdout.
   if debug:
     print "\n(dry run only, not outputting)"
   else:
     json.dump(TOC, sys.stdout, indent=2, sort_keys=True, check_circular=False)
-  
+
 def proc_node(node, parent, path, sections_only):
   # Form the node for this title/chapter/.../section.
-  
+
   remove_footnotes(node.xpath("uslm:heading", namespaces=ns)[0])
   entry = {
     "level": lxml.etree.QName(node.tag).localname,
@@ -78,13 +89,13 @@ def proc_node(node, parent, path, sections_only):
     "name": unicode(node.xpath("string(uslm:heading)", namespaces=ns)),
   }
   if entry["level"] == "level": entry["level"] = "heading"
-  
+
   # To compare with our older HTML scraper, put these lines back in to normalize the content a bit.
   #entry["name"] = entry["name"].replace(u"\u2019", "'") # curly right apostrophe => straight apostrophe (it's inconsistent, so for diffs: sed -i "s/\\\\u2019/'/g" structure_html.json)
   #entry["name"] = entry["name"].replace(u"\u202f", u"\u00a0") # narrow no-break space => no-break space (probably convert this to a space later on)
   #entry["name"] = entry["name"].replace(u"\u2013", "-") # replace en-dashes with simple hyphens
   #if u"\u00a7\u202f" in entry["number"]: return # the HTML converter misses these
-  
+
   # Misformatting
   entry["number"] = entry["number"].replace(u"\u00a7\u202f", "") # section symbol plus narrow no-break space
 
@@ -94,7 +105,7 @@ def proc_node(node, parent, path, sections_only):
   entry["name"] = entry["name"].replace(u"\u00ad", "") # remove soft hyphens
   entry["number"] = entry["number"].replace(u"\u2013", "-") # replace en-dashes with simple hyphens
   if entry["number"] == "": entry["number"] = None
-  
+
   # Don't record structure of phantom parts.
   if entry["name"] in ("]", "Repealed", "Reserved", "Reserved]", "Omitted", "Omitted]", "Transferred", "Transferred]", "Omitted or Transferred", "Vacant]"):
     return
@@ -103,12 +114,12 @@ def proc_node(node, parent, path, sections_only):
 
   # Make an array of level numbering in the path to this section.
   # (To compare with the old HTML output, disable everything but section-level citations.)
-  
+
   if entry['level'] != None and entry['number'] != None:
     path = path + [(entry['level'], entry['number'])]
   else:
     path = path + [None] # flag that this level and descendants do not have a path
-    
+
   if entry["level"] == "section":
     entry["citation"] = "usc/%s/%s" % (path[0][1], entry["number"]) # title number & section number only
   elif entry["level"] == "chapter":
@@ -123,16 +134,16 @@ def proc_node(node, parent, path, sections_only):
   else:
     # for other levels, encode them beneath the title as a path through the numbers
     entry["citation"] = "usc/%s" % "/".join("%s/%s" % p for p in path)
-    
+
   # Debugging helper.
   #if entry.get("citation") == "usc/4/107":
   #  print lxml.etree.tostring(node)
   #  print entry
-    
+
   # Recurse into children.
-  
+
   children = []
-  
+
   if entry["level"] != "section":
   	  # 25 USC 450l has a section within a section, so skip this processing because we never want bottom-half levels of structure
 	  for child in node.xpath("uslm:title|uslm:subtitle|uslm:chapter|uslm:subchapter|uslm:part|uslm:subpart|uslm:division|uslm:level|uslm:section", namespaces=ns):
@@ -141,7 +152,7 @@ def proc_node(node, parent, path, sections_only):
   if len(children):
     entry["subparts"] = children
 
-  # Our older HTML scraper didn't include levels without subparts, except sections. 
+  # Our older HTML scraper didn't include levels without subparts, except sections.
   #if not len(children) and entry["level"] != "section": return
 
   # Pop back up.
@@ -152,7 +163,7 @@ def proc_node(node, parent, path, sections_only):
   else:
     # Add this entry to the parent's list of children.
     parent.append(entry)
-  
+
 def remove_footnotes(node):
   # Remove footnote text and footnote markers from the heading text.
   # lxml makes removing nodes tricky because the tail text gets removed too, but it needs to be moved.
@@ -167,13 +178,13 @@ def remove_footnotes(node):
       else:
         n.getparent().text = filter_nbsp(n.getparent().text) + n.tail
     n.getparent().remove(n)
-  
+
 def download_usc(options):
   debug = options.get("debug", False)
-  
+
   dest_dir = "data/uscode.house.gov/xml"
   utils.mkdir_p(dest_dir)
-  
+
   base_url = "http://uscode.house.gov/download/"
   index_page = lxml.html.parse(urllib.urlopen(base_url + "download.shtml")).getroot()
   for anode in index_page.xpath('//a[.="[XML]"]'):
