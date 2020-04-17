@@ -1,5 +1,5 @@
 logbook
 pytz
-scrapelib
+scrapelib==0.9.1
 ipython
 lxml
